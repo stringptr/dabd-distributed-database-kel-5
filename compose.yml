@@ -1,0 +1,210 @@
+services:
+  postgres-primary-1:
+    image: docker.io/postgres:18.6-alpine3.24
+    container_name: postgres-primary-1
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: primary
+      POSTGRES_PASSWORD: primary
+      POSTGRES_DB: postgres
+      REPLICATION_USER: standby
+      REPLICATION_PASSWORD: standby
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./primary_data_1:/var/lib/postgresql:z
+      - ./init/primary.sh:/docker-entrypoint-initdb.d/1-init.sh:ro
+      - ./init/ddl.sql:/docker-entrypoint-initdb.d/2-ddl.sql:ro
+      - ./init/insert_data.sql:/docker-entrypoint-initdb.d/3-data.sql:ro
+      - ./init/grant.sql:/docker-entrypoint-initdb.d/4-grant.sql:ro
+    command:
+      - postgres
+      - -c
+      - wal_level=replica
+      - -c
+      - max_wal_senders=10
+      - -c
+      - max_replication_slots=10
+      - -c
+      - wal_keep_size=64MB
+      - -c
+      - listen_addresses=*
+    networks:
+      - pg-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U primary -d postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  init-primary-1-replica-1:
+    image: docker.io/postgres:18.6-alpine3.24
+    container_name: init-primary-1-replica-1
+    depends_on:
+      postgres-primary-1:
+        condition: service_healthy
+    environment:
+      PGPASSWORD: standby
+    volumes:
+      - ./primary_1_replica_1_data:/var/lib/postgresql:z
+    networks:
+      - pg-network
+    user: root
+    entrypoint:
+      - /bin/bash
+      - -c
+      - |
+        set -e
+
+        chown -R postgres:postgres /var/lib/postgresql/
+        if [ ! -s /var/lib/postgresql/18/docker/PG_VERSION ]; then
+        echo "Membuat PostgreSQL Standby..."
+        rm -rf /var/lib/postgresql/18/docker
+
+        PGPASSWORD=standby gosu postgres pg_basebackup \
+        -h postgres-primary-1 \
+        -U standby \
+        -D /var/lib/postgresql/18/docker/ \
+        -Fp \
+        -Xs \
+        -P \
+        -R \
+        -S standby1
+
+        else
+        echo "Primary-1_Standby-1 sudah tersedia."
+        fi
+
+  postgres-primary-1-standby-1:
+    image: docker.io/postgres:18.6-alpine3.24
+    container_name: postgres-primary-1-standby-1
+    restart: unless-stopped
+    depends_on:
+      init-primary-1-replica-1:
+        condition: service_completed_successfully
+    ports:
+      - "5442:5432"
+    volumes:
+      - ./primary_1_replica_1_data:/var/lib/postgresql:z
+    environment:
+      POSTGRES_PASSWORD: standby
+      PGDATA: /var/lib/postgresql/18/docker
+    networks:
+      - pg-network
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      [
+        "while [ ! -s \"$PGDATA/PG_VERSION\" ]; do echo 'Waiting for standby
+          data to be ready...'; sleep 2; done; exec
+          /usr/local/bin/docker-entrypoint.sh postgres",
+      ]
+
+  postgres-primary-2:
+    image: docker.io/postgres:18.6-alpine3.24
+    container_name: postgres-primary-2
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: primary
+      POSTGRES_PASSWORD: primary
+      POSTGRES_DB: postgres
+      REPLICATION_USER: standby
+      REPLICATION_PASSWORD: standby
+    ports:
+      - "5433:5432"
+    volumes:
+      - ./primary_data_2:/var/lib/postgresql:z
+      - ./init/primary.sh:/docker-entrypoint-initdb.d/1-init.sh:ro
+      - ./init/ddl.sql:/docker-entrypoint-initdb.d/2-ddl.sql:ro
+      - ./init/insert_data.sql:/docker-entrypoint-initdb.d/3-data.sql:ro
+      - ./init/grant.sql:/docker-entrypoint-initdb.d/4-grant.sql:ro
+    command:
+      - postgres
+      - -c
+      - wal_level=replica
+      - -c
+      - max_wal_senders=10
+      - -c
+      - max_replication_slots=10
+      - -c
+      - wal_keep_size=64MB
+      - -c
+      - listen_addresses=*
+    networks:
+      - pg-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U primary -d postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  init-primary-2-replica-1:
+    image: docker.io/postgres:18.6-alpine3.24
+    container_name: init-primary-2-replica-1
+    depends_on:
+      postgres-primary-2:
+        condition: service_healthy
+    environment:
+      PGPASSWORD: standby
+    volumes:
+      - ./primary_2_replica_1_data:/var/lib/postgresql:z
+    networks:
+      - pg-network
+    user: root
+    entrypoint:
+      - /bin/bash
+      - -c
+      - |
+        set -e
+
+        chown -R postgres:postgres /var/lib/postgresql/
+        if [ ! -s /var/lib/postgresql/18/docker/PG_VERSION ]; then
+        echo "Membuat PostgreSQL Standby..."
+        rm -rf /var/lib/postgresql/18/docker
+
+        PGPASSWORD=standby gosu postgres pg_basebackup \
+        -h postgres-primary-2 \
+        -U standby \
+        -D /var/lib/postgresql/18/docker/ \
+        -Fp \
+        -Xs \
+        -P \
+        -R \
+        -S standby1
+
+        else
+        echo "Primary-2_Standby-1 sudah tersedia."
+        fi
+
+  postgres-primary-2-standby-1:
+    image: docker.io/postgres:18.6-alpine3.24
+    container_name: postgres-primary-2-standby-1
+    restart: unless-stopped
+    depends_on:
+      init-primary-2-replica-1:
+        condition: service_completed_successfully
+    ports:
+      - "5443:5432"
+    volumes:
+      - ./primary_2_replica_1_data:/var/lib/postgresql:z
+    environment:
+      POSTGRES_PASSWORD: standby
+      PGDATA: /var/lib/postgresql/18/docker
+    networks:
+      - pg-network
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      [
+        "while [ ! -s \"$PGDATA/PG_VERSION\" ]; do echo 'Waiting for standby
+          data to be ready...'; sleep 2; done; exec
+          /usr/local/bin/docker-entrypoint.sh postgres",
+      ]
+
+volumes:
+  primary_data_1:
+  primary_1_replica_1_data:
+  primary_data_2:
+  primary_2_replica_1_data:
+
+networks:
+  pg-network:
+    driver: bridge
