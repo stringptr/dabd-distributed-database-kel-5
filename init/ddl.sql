@@ -73,15 +73,23 @@ CREATE TABLE Coupons (
     usage_limit INT
 );
 
--- 8. Orders
+-- 8. Orders (Partitioned Table - Hash Partitioning on order_id)
 CREATE TABLE Orders (
-    order_id SERIAL PRIMARY KEY,
+    order_id SERIAL,
     customer_id INT REFERENCES Customers(customer_id) NOT NULL,
     coupon_id INT REFERENCES Coupons(coupon_id) NULL, -- optional discount
     order_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     status VARCHAR(20) CHECK (status IN ('Pending', 'Paid', 'Shipped', 'Delivered', 'Cancelled')) NOT NULL,
-    total_amount DECIMAL(10,2) NOT NULL CHECK (total_amount >= 0)
-);
+    total_amount DECIMAL(10,2) NOT NULL CHECK (total_amount >= 0),
+    PRIMARY KEY (order_id)
+) PARTITION BY HASH (order_id);
+
+-- Partitions for Orders (2 Hash Partitions)
+CREATE TABLE orders_p0 PARTITION OF Orders
+    FOR VALUES WITH (MODULUS 2, REMAINDER 0);
+
+CREATE TABLE orders_p1 PARTITION OF Orders
+    FOR VALUES WITH (MODULUS 2, REMAINDER 1);
 
 -- 9. Order_Items
 CREATE TABLE Order_Items (
@@ -93,20 +101,52 @@ CREATE TABLE Order_Items (
     discount DECIMAL(5,2) DEFAULT 0.00 CHECK (discount >= 0)
 );
 
--- 10. Payments
+-- 10. Payments (Partitioned Table - List Partitioning on status)
 CREATE TABLE Payments (
-    payment_id SERIAL PRIMARY KEY,
-    order_id INT REFERENCES Orders(order_id) UNIQUE NOT NULL, -- 1:1 relationship
+    payment_id SERIAL,
+    order_id INT REFERENCES Orders(order_id) NOT NULL, -- 1:1 relationship
     payment_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     amount DECIMAL(10,2) NOT NULL CHECK (amount >= 0),
     method VARCHAR(20) CHECK (method IN ('Credit Card', 'PayPal', 'Bank Transfer', 'Gift Card')) NOT NULL,
-    status VARCHAR(20) CHECK (status IN ('Pending', 'Completed', 'Failed')) NOT NULL
-);
+    status VARCHAR(20) CHECK (status IN ('Pending', 'Completed', 'Failed')) NOT NULL,
+    PRIMARY KEY (payment_id, status),
+    UNIQUE (order_id, status)
+) PARTITION BY LIST (status);
+
+-- Partitions for Payments (List by status)
+CREATE TABLE payments_completed PARTITION OF Payments
+    FOR VALUES IN ('Completed');
+
+CREATE TABLE payments_pending PARTITION OF Payments
+    FOR VALUES IN ('Pending');
+
+CREATE TABLE payments_failed PARTITION OF Payments
+    FOR VALUES IN ('Failed');
+
+-- Trigger Penjaga Constraint Bisnis 1: 1 Order hanya boleh punya 1 Payment (lintas partisi)
+CREATE OR REPLACE FUNCTION trg_check_payment_order_unique()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM payments
+        WHERE order_id = NEW.order_id
+          AND payment_id <> NEW.payment_id
+    ) THEN
+        RAISE EXCEPTION 'Business Rule Violation: order_id % already has a payment record.', NEW.order_id;
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER check_payment_order_unique
+    BEFORE INSERT OR UPDATE ON payments
+    FOR EACH ROW
+    EXECUTE FUNCTION trg_check_payment_order_unique();
 
 -- 11. Shipments
 CREATE TABLE Shipments (
     shipment_id SERIAL PRIMARY KEY,
-    order_id INT REFERENCES Orders(order_id) UNIQUE NOT NULL, -- 1:1 usually
+    order_id INT UNIQUE REFERENCES Orders(order_id) NOT NULL, -- 1:1 usually
     warehouse_id INT REFERENCES Warehouses(warehouse_id) NOT NULL,
     carrier VARCHAR(50),
     tracking_number VARCHAR(100),
@@ -115,13 +155,45 @@ CREATE TABLE Shipments (
     CHECK (delivered_date IS NULL OR shipped_date IS NOT NULL) -- cannot deliver before ship
 );
 
--- 12. Reviews
+-- 12. Reviews (Partitioned Table - Range Partitioning on rating)
 CREATE TABLE Reviews (
-    review_id SERIAL PRIMARY KEY,
+    review_id SERIAL,
     product_id INT REFERENCES Products(product_id) ON DELETE CASCADE NOT NULL,
     customer_id INT REFERENCES Customers(customer_id) ON DELETE CASCADE NOT NULL,
     rating INT CHECK (rating BETWEEN 1 AND 5) NOT NULL,
     comment TEXT,
     review_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE (product_id, customer_id) -- prevent duplicate reviews
-);
+    PRIMARY KEY (review_id, rating),
+    UNIQUE (product_id, customer_id, rating) -- prevent duplicate reviews per rating
+) PARTITION BY RANGE (rating);
+
+-- Partitions for Reviews (Range by rating: low, mid, high)
+CREATE TABLE reviews_low PARTITION OF Reviews
+    FOR VALUES FROM (1) TO (3); -- rating 1 and 2
+
+CREATE TABLE reviews_mid PARTITION OF Reviews
+    FOR VALUES FROM (3) TO (4); -- rating 3
+
+CREATE TABLE reviews_high PARTITION OF Reviews
+    FOR VALUES FROM (4) TO (6); -- rating 4 and 5
+
+-- Trigger Penjaga Constraint Bisnis 2: 1 Customer hanya boleh mereview 1 Product sekali (lintas partisi)
+CREATE OR REPLACE FUNCTION trg_check_review_customer_product_unique()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM reviews
+        WHERE product_id = NEW.product_id
+          AND customer_id = NEW.customer_id
+          AND review_id <> NEW.review_id
+    ) THEN
+        RAISE EXCEPTION 'Business Rule Violation: customer_id % already reviewed product_id %.', NEW.customer_id, NEW.product_id;
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER check_review_customer_product_unique
+    BEFORE INSERT OR UPDATE ON reviews
+    FOR EACH ROW
+    EXECUTE FUNCTION trg_check_review_customer_product_unique();

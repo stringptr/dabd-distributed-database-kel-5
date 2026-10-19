@@ -10,16 +10,16 @@ ORDER BY order_count DESC;
 
 INSERT INTO orders (order_id, customer_id, coupon_id, order_date, status, total_amount)
 VALUES
-  (201, 148, NULL, '2026-09-10 10:00:00', 'Paid', 1500.00),
-  (202, 148, NULL, '2026-09-11 11:00:00', 'Paid', 2300.00);
+  (101, 48, NULL, '2026-09-10 10:00:00', 'Paid', 1500.00),
+  (102, 48, NULL, '2026-09-11 11:00:00', 'Paid', 2300.00);
 
 
 INSERT INTO order_items (order_id, product_id, quantity, unit_price, discount)
 VALUES
-  (201, 5, 2, 382.27, 0.00),
-  (201, 10, 1, 291.37, 0.05),
-  (202, 8, 3, 65.82, 0.00),
-  (202, 11, 1, 257.84, 0.10);
+  (101, 5, 2, 382.27, 0.00),
+  (101, 10, 1, 291.37, 0.05),
+  (102, 8, 3, 65.82, 0.00),
+  (102, 11, 1, 257.84, 0.10);
 
 
 SELECT
@@ -34,13 +34,13 @@ FROM pg_stat_replication;
 
 INSERT INTO orders (order_id, customer_id, coupon_id, order_date, status, total_amount)
 VALUES
-  (203, 148, NULL, '2026-09-10 10:00:00', 'Paid', 1500.00),
-  (204, 148, NULL, '2026-09-11 11:00:00', 'Paid', 2300.00);
+  (103, 48, NULL, '2026-09-10 10:00:00', 'Paid', 1500.00),
+  (104, 48, NULL, '2026-09-11 11:00:00', 'Paid', 2300.00);
 
 
 INSERT INTO order_items (order_id, product_id, quantity, unit_price, discount)
 VALUES
-  (203, 5, 2, 382.27, 0.00),
-  (203, 10, 1, 291.37, 0.05),
-  (204, 8, 3, 65.82, 0.00),
-  (204, 11, 1, 257.84, 0.10);
+  (103, 5, 2, 382.27, 0.00),
+  (103, 10, 1, 291.37, 0.05),
+  (104, 8, 3, 65.82, 0.00),
+  (104, 11, 1, 257.84, 0.10);

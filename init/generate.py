@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
+import os
 import random
-import itertools
 from datetime import datetime, timedelta
 from faker import Faker
 
@@ -16,6 +16,9 @@ NUM_PRODUCTS = 250
 NUM_COUPONS = 15
 NUM_ORDERS = 200
 NUM_REVIEWS = 150
+
+SHARD1_CUST_COUNT = 75
+SHARD1_ORDER_COUNT = 100
 
 
 def esc(s):
@@ -44,46 +47,6 @@ category_names = [
     ("Fitness", "Sports"),
     ("Team Sports", "Sports"),
 ]
-assert len(category_names) == 20
-
-cat_id_map = {}
-categories_sql = []
-
-for name, parent in category_names:
-    parent_id = (
-        "NULL"
-        if parent is None
-        else f"(SELECT category_id FROM categories WHERE name = '{parent}')"
-    )
-    categories_sql.append(
-        f"INSERT INTO categories (name, description, parent_category_id) VALUES "
-        f"('{esc(name)}', '{esc(fake.text(max_nb_chars=100))}', {parent_id});"
-    )
-
-suppliers_sql = []
-for _ in range(NUM_SUPPLIERS):
-    suppliers_sql.append(
-        f"INSERT INTO suppliers (name, contact_name, phone, email, address) VALUES "
-        f"('{esc(fake.company())}', '{esc(fake.name())}', '{fake.phone_number()}', "
-        f"'{fake.email()}', '{esc(fake.address())}');"
-    )
-
-warehouses_sql = []
-for _ in range(NUM_WAREHOUSES):
-    warehouses_sql.append(
-        f"INSERT INTO warehouses (name, address, city, state, zip_code) VALUES "
-        f"('{esc(fake.company())} DC', '{esc(fake.street_address())}', '{fake.city()}', "
-        f"'{fake.state_abbr()}', '{fake.zipcode()}');"
-    )
-
-customers_sql = []
-for _ in range(NUM_CUSTOMERS):
-    customers_sql.append(
-        f"INSERT INTO customers (first_name, last_name, email, phone, address_line, city, state, zip_code) VALUES "
-        f"('{esc(fake.first_name())}', '{esc(fake.last_name())}', '{fake.email()}', "
-        f"'{fake.phone_number()}', '{esc(fake.street_address())}', '{fake.city()}', "
-        f"'{fake.state_abbr()}', '{fake.zipcode()}');"
-    )
 
 coupon_codes = [
     "SAVE10",
@@ -102,21 +65,6 @@ coupon_codes = [
     "LASTCHANCE",
     "MEGA10",
 ]
-coupons_sql = []
-for i in range(NUM_COUPONS):
-    valid_from = fake.date_between(start_date="-90d", end_date="-30d")
-    valid_to = valid_from + timedelta(days=random.randint(20, 60))
-    disc_type = random.choice(["Percentage", "Fixed"])
-    disc_value = (
-        round(random.uniform(5, 30), 2)
-        if disc_type == "Percentage"
-        else round(random.uniform(5, 25), 2)
-    )
-    coupons_sql.append(
-        f"INSERT INTO coupons (code, description, discount_type, discount_value, valid_from, valid_to, usage_limit) VALUES "
-        f"('{coupon_codes[i]}', '{esc(fake.sentence())}', '{disc_type}', {disc_value}, "
-        f"'{valid_from}', '{valid_to}', {random.randint(20, 100)});"
-    )
 
 product_names = {
     "Electronics": [
@@ -158,35 +106,31 @@ product_names = {
         "Gigabyte Aero",
     ],
     "Audio": [
-        "Noise Cancelling Earbuds",
-        "Over-Ear Headphones",
-        "Soundbar",
-        "Portable Speaker",
         "Studio Monitors",
-        "Amplifier",
         "Turntable",
-        "Digital Audio Player",
+        "Soundbar",
+        "DAC Amplifier",
+        "Microphone",
+        "Audio Interface",
+        "Earbuds",
     ],
     "Clothing": [
-        "Classic T-Shirt",
-        "Hoodie",
-        "Jeans",
-        "Chinos",
-        "Polo Shirt",
-        "Jacket",
-        "Sweater",
-        "Shorts",
+        "Denim Jacket",
+        "Cotton T-Shirt",
+        "Chino Pants",
+        "Wool Sweater",
+        "Raincoat",
     ],
     "Men's Apparel": [
-        "Slim Fit Suit",
-        "Casual Blazer",
-        "Dress Shirt",
-        "Tie Set",
-        "Cargo Pants",
-        "Henley",
+        "Oxford Shirt",
+        "Cargo Shorts",
+        "Polo Shirt",
+        "Slim Jeans",
+        "Blazer",
+        "Thermal Underwear",
     ],
     "Women's Apparel": [
-        "Floral Dress",
+        "Summer Dress",
         "Blouse",
         "Skirt",
         "Leggings",
@@ -296,78 +240,19 @@ product_names = {
     ],
 }
 
-cat_names = [c[0] for c in category_names]
-cat_id_map_gen = {name: idx + 1 for idx, name in enumerate(cat_names)}
-
-all_cat_names = list(product_names.keys())
-valid_cat_names = [c for c in all_cat_names if c in cat_id_map_gen]
-
-products_sql = []
-product_ids = list(range(1, NUM_PRODUCTS + 1))
-
-for pid in range(1, NUM_PRODUCTS + 1):
-    cat_name = random.choice(valid_cat_names)
-    cat_id = cat_id_map_gen[cat_name]
-    name = random.choice(product_names[cat_name]) + " " + str(random.randint(1, 100))
-    price = round(random.uniform(15.99, 999.99), 2)
-    cost = round(price * random.uniform(0.4, 0.85), 2)
-    supplier_id = random.randint(1, NUM_SUPPLIERS)
-    products_sql.append(
-        f"INSERT INTO products (product_id, name, description, price, cost, category_id, supplier_id) VALUES "
-        f"({pid}, '{esc(name)}', '{esc(fake.text(max_nb_chars=200))}', {price}, {cost}, {cat_id}, {supplier_id});"
-    )
-
-orders_sql = []
-order_statuses = ["Pending", "Paid", "Shipped", "Delivered", "Cancelled"]
-status_weights = [5, 15, 20, 55, 5]  # 55% Delivered, 20% Shipped, 15% Paid, etc.
-order_dates = []
-
-for order_id in range(1, NUM_ORDERS + 1):
-    customer_id = random.randint(1, NUM_CUSTOMERS)
-    coupon_id = random.choice([None] + list(range(1, NUM_COUPONS + 1)))
-    if coupon_id is None:
-        coupon_val = "NULL"
-    else:
-        coupon_val = str(coupon_id)
-    status = random.choices(order_statuses, weights=status_weights)[0]
-    order_date = fake.date_time_between(start_date="-180d", end_date="now")
-    order_dates.append(order_date)
-    orders_sql.append(
-        f"INSERT INTO orders (order_id, customer_id, coupon_id, order_date, status, total_amount) VALUES "
-        f"({order_id}, {customer_id}, {coupon_val}, '{order_date.strftime('%Y-%m-%d %H:%M:%S')}', '{status}', 0);"
-    )
-
-order_items_sql = []
-order_totals = [0.0] * (NUM_ORDERS + 1)  # 1-indexed
-
-for order_id in range(1, NUM_ORDERS + 1):
-    num_items = random.choices([1, 2, 3, 4, 5], weights=[10, 25, 30, 20, 15])[0]
-    for _ in range(num_items):
-        product_id = random.randint(1, NUM_PRODUCTS)
-        quantity = random.randint(1, 3)
-        pass
-
 print("Building data structures...")
 
+# 1. Categories
 categories_data = []
-suppliers_data = []
-warehouses_data = []
-customers_data = []
-coupons_data = []
-products_data = []
-orders_data = []
-order_items_data = []
-payments_data = []
-shipments_data = []
-inventory_data = []
-reviews_data = []
-
 for name, parent in category_names:
     categories_data.append(
         {"name": name, "description": fake.text(max_nb_chars=100), "parent": parent}
     )
 cat_name_to_id = {c["name"]: idx + 1 for idx, c in enumerate(categories_data)}
+valid_cat_names = [c for c in product_names.keys() if c in cat_name_to_id]
 
+# 2. Suppliers
+suppliers_data = []
 for _ in range(NUM_SUPPLIERS):
     suppliers_data.append(
         {
@@ -379,6 +264,8 @@ for _ in range(NUM_SUPPLIERS):
         }
     )
 
+# 3. Warehouses
+warehouses_data = []
 for _ in range(NUM_WAREHOUSES):
     warehouses_data.append(
         {
@@ -390,9 +277,16 @@ for _ in range(NUM_WAREHOUSES):
         }
     )
 
-for _ in range(NUM_CUSTOMERS):
+# 4. Customers: Shard 1 (ID 1..75), Shard 2 (ID 1001..1075)
+customers_data = []
+for idx in range(NUM_CUSTOMERS):
+    if idx < SHARD1_CUST_COUNT:
+        cid = idx + 1
+    else:
+        cid = 1001 + (idx - SHARD1_CUST_COUNT)
     customers_data.append(
         {
+            "customer_id": cid,
             "first": fake.first_name(),
             "last": fake.last_name(),
             "email": fake.email(),
@@ -404,6 +298,8 @@ for _ in range(NUM_CUSTOMERS):
         }
     )
 
+# 5. Coupons
+coupons_data = []
 for i in range(NUM_COUPONS):
     valid_from = fake.date_between(start_date="-90d", end_date="-30d")
     valid_to = valid_from + timedelta(days=random.randint(20, 60))
@@ -425,6 +321,8 @@ for i in range(NUM_COUPONS):
         }
     )
 
+# 6. Products
+products_data = []
 product_prices = {}
 for pid in range(1, NUM_PRODUCTS + 1):
     cat_name = random.choice(valid_cat_names)
@@ -446,8 +344,19 @@ for pid in range(1, NUM_PRODUCTS + 1):
     )
     product_prices[pid] = price
 
-for order_id in range(1, NUM_ORDERS + 1):
-    customer_id = random.randint(1, NUM_CUSTOMERS)
+# 7. Orders: Shard 1 (ID 1..100 with customers 1..75), Shard 2 (ID 1001..1100 with customers 1001..1075)
+orders_data = []
+order_statuses = ["Pending", "Paid", "Shipped", "Delivered", "Cancelled"]
+status_weights = [5, 15, 20, 55, 5]
+
+for idx in range(NUM_ORDERS):
+    if idx < SHARD1_ORDER_COUNT:
+        order_id = idx + 1
+        customer_id = random.randint(1, 75)
+    else:
+        order_id = 1001 + (idx - SHARD1_ORDER_COUNT)
+        customer_id = random.randint(1001, 1075)
+
     coupon_id = random.choice([None] + list(range(1, NUM_COUPONS + 1)))
     status = random.choices(order_statuses, weights=status_weights)[0]
     order_date = fake.date_time_between(start_date="-180d", end_date="now")
@@ -462,7 +371,10 @@ for order_id in range(1, NUM_ORDERS + 1):
         }
     )
 
-for order_id in range(1, NUM_ORDERS + 1):
+# 8. Order Items
+order_items_data = []
+for order in orders_data:
+    order_id = order["order_id"]
     num_items = random.choices([1, 2, 3, 4, 5], weights=[10, 25, 30, 20, 15])[0]
     total = 0.0
     for _ in range(num_items):
@@ -480,7 +392,7 @@ for order_id in range(1, NUM_ORDERS + 1):
                 "discount": discount,
             }
         )
-    coupon_id = orders_data[order_id - 1]["coupon_id"]
+    coupon_id = order["coupon_id"]
     if coupon_id is not None:
         coup = coupons_data[coupon_id - 1]
         if coup["disc_type"] == "Percentage":
@@ -488,17 +400,20 @@ for order_id in range(1, NUM_ORDERS + 1):
         else:
             total = max(0, total - coup["disc_value"])
     total = round(total, 2)
-    orders_data[order_id - 1]["total_amount"] = total
+    order["total_amount"] = total
 
-for order_id in range(1, NUM_ORDERS + 1):
-    order_status = orders_data[order_id - 1]["status"]
+# 9. Payments
+payments_data = []
+for order in orders_data:
+    order_id = order["order_id"]
+    order_status = order["status"]
     if order_status == "Cancelled":
         pay_status = "Failed"
     elif order_status in ["Pending"]:
         pay_status = "Pending"
     else:
         pay_status = "Completed"
-    amount = orders_data[order_id - 1]["total_amount"]
+    amount = order["total_amount"]
     method = random.choice(["Credit Card", "PayPal", "Bank Transfer", "Gift Card"])
     payments_data.append(
         {
@@ -506,24 +421,25 @@ for order_id in range(1, NUM_ORDERS + 1):
             "amount": amount,
             "method": method,
             "status": pay_status,
-            "payment_date": orders_data[order_id - 1]["order_date"]
-            + timedelta(hours=random.randint(1, 48)),
+            "payment_date": order["order_date"] + timedelta(hours=random.randint(1, 48)),
         }
     )
 
-for order_id in range(1, NUM_ORDERS + 1):
-    order_status = orders_data[order_id - 1]["status"]
+# 10. Shipments
+shipments_data = []
+for order in orders_data:
+    order_id = order["order_id"]
+    order_status = order["status"]
     if order_status in ["Shipped", "Delivered"]:
         warehouse_id = random.randint(1, NUM_WAREHOUSES)
         carrier = random.choice(["UPS", "FedEx", "DHL", "USPS", "Amazon Logistics"])
         tracking = fake.uuid4()[:8].upper()
-        shipped_date = orders_data[order_id - 1]["order_date"] + timedelta(
-            days=random.randint(1, 5)
+        shipped_date = order["order_date"] + timedelta(days=random.randint(1, 5))
+        delivered_date = (
+            shipped_date + timedelta(days=random.randint(1, 7))
+            if order_status == "Delivered"
+            else None
         )
-        if order_status == "Delivered":
-            delivered_date = shipped_date + timedelta(days=random.randint(1, 7))
-        else:
-            delivered_date = None
         shipments_data.append(
             {
                 "order_id": order_id,
@@ -534,10 +450,9 @@ for order_id in range(1, NUM_ORDERS + 1):
                 "delivered_date": delivered_date,
             }
         )
-    else:
-        # No shipment for others
-        pass
 
+# 11. Inventory
+inventory_data = []
 for pid in range(1, NUM_PRODUCTS + 1):
     for wid in range(1, NUM_WAREHOUSES + 1):
         qty = random.randint(0, 500)
@@ -551,9 +466,14 @@ for pid in range(1, NUM_PRODUCTS + 1):
             }
         )
 
+# 12. Reviews
+reviews_data = []
 reviewed_products = random.choices(range(1, NUM_PRODUCTS + 1), k=NUM_REVIEWS)
-for pid in reviewed_products:
-    customer_id = random.randint(1, NUM_CUSTOMERS)
+for idx, pid in enumerate(reviewed_products):
+    if idx < NUM_REVIEWS // 2:
+        customer_id = random.randint(1, 75)
+    else:
+        customer_id = random.randint(1001, 1075)
     rating = random.choices([1, 2, 3, 4, 5], weights=[5, 10, 25, 40, 20])[0]
     comment = fake.text(max_nb_chars=300) if random.random() > 0.3 else None
     review_date = fake.date_time_between(start_date="-150d", end_date="now")
@@ -566,6 +486,7 @@ for pid in reviewed_products:
             "review_date": review_date,
         }
     )
+
 seen = set()
 unique_reviews = []
 for r in reviews_data:
@@ -575,146 +496,184 @@ for r in reviews_data:
         unique_reviews.append(r)
 reviews_data = unique_reviews
 
-print("Generating SQL...")
 
-sql_lines = []
-sql_lines.append("BEGIN TRANSACTION;")
-sql_lines.append("")
+def build_sql(shard):
+    """Build SQL statements for a specific shard (1 or 2)."""
+    sql_lines = []
+    sql_lines.append("BEGIN TRANSACTION;")
+    sql_lines.append("")
 
-sql_lines.append("-- Categories")
-for c in categories_data:
-    parent = (
-        "NULL"
-        if c["parent"] is None
-        else f"(SELECT category_id FROM categories WHERE name = '{esc(c['parent'])}')"
-    )
-    sql_lines.append(
-        f"INSERT INTO categories (name, description, parent_category_id) VALUES "
-        f"('{esc(c['name'])}', '{esc(c['description'])}', {parent});"
-    )
-sql_lines.append("")
+    # Categories (Replicated)
+    sql_lines.append("-- Categories (Replicated)")
+    for c in categories_data:
+        parent = (
+            "NULL"
+            if c["parent"] is None
+            else f"(SELECT category_id FROM categories WHERE name = '{esc(c['parent'])}')"
+        )
+        sql_lines.append(
+            f"INSERT INTO categories (name, description, parent_category_id) VALUES "
+            f"('{esc(c['name'])}', '{esc(c['description'])}', {parent});"
+        )
+    sql_lines.append("")
 
-sql_lines.append("-- Suppliers")
-for s in suppliers_data:
-    sql_lines.append(
-        f"INSERT INTO suppliers (name, contact_name, phone, email, address) VALUES "
-        f"('{esc(s['name'])}', '{esc(s['contact'])}', '{s['phone']}', '{s['email']}', '{esc(s['address'])}');"
-    )
-sql_lines.append("")
+    # Suppliers (Replicated)
+    sql_lines.append("-- Suppliers (Replicated)")
+    for s in suppliers_data:
+        sql_lines.append(
+            f"INSERT INTO suppliers (name, contact_name, phone, email, address) VALUES "
+            f"('{esc(s['name'])}', '{esc(s['contact'])}', '{s['phone']}', '{s['email']}', '{esc(s['address'])}');"
+        )
+    sql_lines.append("")
 
-sql_lines.append("-- Warehouses")
-for w in warehouses_data:
-    sql_lines.append(
-        f"INSERT INTO warehouses (name, address, city, state, zip_code) VALUES "
-        f"('{esc(w['name'])}', '{esc(w['address'])}', '{w['city']}', '{w['state']}', '{w['zip']}');"
-    )
-sql_lines.append("")
+    # Warehouses (Replicated)
+    sql_lines.append("-- Warehouses (Replicated)")
+    for w in warehouses_data:
+        sql_lines.append(
+            f"INSERT INTO warehouses (name, address, city, state, zip_code) VALUES "
+            f"('{esc(w['name'])}', '{esc(w['address'])}', '{w['city']}', '{w['state']}', '{w['zip']}');"
+        )
+    sql_lines.append("")
 
-sql_lines.append("-- Customers")
-for c in customers_data:
-    sql_lines.append(
-        f"INSERT INTO customers (first_name, last_name, email, phone, address_line, city, state, zip_code) VALUES "
-        f"('{esc(c['first'])}', '{esc(c['last'])}', '{c['email']}', '{c['phone']}', "
-        f"'{esc(c['address'])}', '{c['city']}', '{c['state']}', '{c['zip']}');"
-    )
-sql_lines.append("")
+    # Coupons (Replicated)
+    sql_lines.append("-- Coupons (Replicated)")
+    for cp in coupons_data:
+        sql_lines.append(
+            f"INSERT INTO coupons (code, description, discount_type, discount_value, valid_from, valid_to, usage_limit) VALUES "
+            f"('{cp['code']}', '{esc(cp['desc'])}', '{cp['disc_type']}', {cp['disc_value']}, "
+            f"'{cp['valid_from']}', '{cp['valid_to']}', {cp['usage_limit']});"
+        )
+    sql_lines.append("")
 
-sql_lines.append("-- Coupons")
-for cp in coupons_data:
-    sql_lines.append(
-        f"INSERT INTO coupons (code, description, discount_type, discount_value, valid_from, valid_to, usage_limit) VALUES "
-        f"('{cp['code']}', '{esc(cp['desc'])}', '{cp['disc_type']}', {cp['disc_value']}, "
-        f"'{cp['valid_from']}', '{cp['valid_to']}', {cp['usage_limit']});"
-    )
-sql_lines.append("")
+    # Products (Replicated)
+    sql_lines.append("-- Products (Replicated)")
+    for p in products_data:
+        sql_lines.append(
+            f"INSERT INTO products (product_id, name, description, price, cost, category_id, supplier_id) VALUES "
+            f"({p['product_id']}, '{esc(p['name'])}', '{esc(p['desc'])}', {p['price']}, {p['cost']}, "
+            f"{p['category_id']}, {p['supplier_id']});"
+        )
+    sql_lines.append("")
 
-sql_lines.append("-- Products")
-for p in products_data:
-    sql_lines.append(
-        f"INSERT INTO products (product_id, name, description, price, cost, category_id, supplier_id) VALUES "
-        f"({p['product_id']}, '{esc(p['name'])}', '{esc(p['desc'])}', {p['price']}, {p['cost']}, "
-        f"{p['category_id']}, {p['supplier_id']});"
-    )
-sql_lines.append("")
+    # Inventory (Replicated)
+    sql_lines.append("-- Inventory (Replicated)")
+    for inv in inventory_data:
+        sql_lines.append(
+            f"INSERT INTO inventory (product_id, warehouse_id, quantity_on_hand, reorder_level) VALUES "
+            f"({inv['product_id']}, {inv['warehouse_id']}, {inv['quantity']}, {inv['reorder']});"
+        )
+    sql_lines.append("")
 
-sql_lines.append("-- Orders")
-for o in orders_data:
-    coupon = "NULL" if o["coupon_id"] is None else str(o["coupon_id"])
-    sql_lines.append(
-        f"INSERT INTO orders (order_id, customer_id, coupon_id, order_date, status, total_amount) VALUES "
-        f"({o['order_id']}, {o['customer_id']}, {coupon}, "
-        f"'{o['order_date'].strftime('%Y-%m-%d %H:%M:%S')}', '{o['status']}', {o['total_amount']});"
-    )
-sql_lines.append("")
+    # Sharded Entities
+    if shard == 1:
+        target_customers = [c for c in customers_data if c["customer_id"] <= 1000]
+        target_orders = [o for o in orders_data if o["order_id"] <= 1000]
+        target_reviews = [r for r in reviews_data if r["customer_id"] <= 1000]
+    else:
+        target_customers = [c for c in customers_data if c["customer_id"] > 1000]
+        target_orders = [o for o in orders_data if o["order_id"] > 1000]
+        target_reviews = [r for r in reviews_data if r["customer_id"] > 1000]
 
-sql_lines.append("-- Order Items")
-for oi in order_items_data:
-    sql_lines.append(
-        f"INSERT INTO order_items (order_id, product_id, quantity, unit_price, discount) VALUES "
-        f"({oi['order_id']}, {oi['product_id']}, {oi['quantity']}, {oi['unit_price']}, {oi['discount']});"
-    )
-sql_lines.append("")
+    target_order_ids = set(o["order_id"] for o in target_orders)
+    target_order_items = [oi for oi in order_items_data if oi["order_id"] in target_order_ids]
+    target_payments = [p for p in payments_data if p["order_id"] in target_order_ids]
+    target_shipments = [s for s in shipments_data if s["order_id"] in target_order_ids]
 
-sql_lines.append("-- Payments")
-for pay in payments_data:
-    sql_lines.append(
-        f"INSERT INTO payments (order_id, amount, method, status, payment_date) VALUES "
-        f"({pay['order_id']}, {pay['amount']}, '{pay['method']}', '{pay['status']}', "
-        f"'{pay['payment_date'].strftime('%Y-%m-%d %H:%M:%S')}');"
-    )
-sql_lines.append("")
+    # Customers
+    sql_lines.append(f"-- Customers (Shard {shard})")
+    for c in target_customers:
+        sql_lines.append(
+            f"INSERT INTO customers (customer_id, first_name, last_name, email, phone, address_line, city, state, zip_code) VALUES "
+            f"({c['customer_id']}, '{esc(c['first'])}', '{esc(c['last'])}', '{c['email']}', '{c['phone']}', "
+            f"'{esc(c['address'])}', '{c['city']}', '{c['state']}', '{c['zip']}');"
+        )
+    sql_lines.append("")
 
-sql_lines.append("-- Shipments")
-for sh in shipments_data:
-    delivered = (
-        "NULL"
-        if sh["delivered_date"] is None
-        else f"'{sh['delivered_date'].strftime('%Y-%m-%d %H:%M:%S')}'"
-    )
-    sql_lines.append(
-        f"INSERT INTO shipments (order_id, warehouse_id, carrier, tracking_number, shipped_date, delivered_date) VALUES "
-        f"({sh['order_id']}, {sh['warehouse_id']}, '{sh['carrier']}', '{sh['tracking']}', "
-        f"'{sh['shipped_date'].strftime('%Y-%m-%d %H:%M:%S')}', {delivered});"
-    )
-sql_lines.append("")
+    # Orders
+    sql_lines.append(f"-- Orders (Shard {shard})")
+    for o in target_orders:
+        coupon = "NULL" if o["coupon_id"] is None else str(o["coupon_id"])
+        sql_lines.append(
+            f"INSERT INTO orders (order_id, customer_id, coupon_id, order_date, status, total_amount) VALUES "
+            f"({o['order_id']}, {o['customer_id']}, {coupon}, "
+            f"'{o['order_date'].strftime('%Y-%m-%d %H:%M:%S')}', '{o['status']}', {o['total_amount']});"
+        )
+    sql_lines.append("")
 
-sql_lines.append("-- Inventory")
-for inv in inventory_data:
-    sql_lines.append(
-        f"INSERT INTO inventory (product_id, warehouse_id, quantity_on_hand, reorder_level) VALUES "
-        f"({inv['product_id']}, {inv['warehouse_id']}, {inv['quantity']}, {inv['reorder']});"
-    )
-sql_lines.append("")
+    # Order Items
+    sql_lines.append(f"-- Order Items (Shard {shard})")
+    for oi in target_order_items:
+        sql_lines.append(
+            f"INSERT INTO order_items (order_id, product_id, quantity, unit_price, discount) VALUES "
+            f"({oi['order_id']}, {oi['product_id']}, {oi['quantity']}, {oi['unit_price']}, {oi['discount']});"
+        )
+    sql_lines.append("")
 
-sql_lines.append("-- Reviews")
-for rv in reviews_data:
-    comment = "NULL" if rv["comment"] is None else f"'{esc(rv['comment'])}'"
-    sql_lines.append(
-        f"INSERT INTO reviews (product_id, customer_id, rating, comment, review_date) VALUES "
-        f"({rv['product_id']}, {rv['customer_id']}, {rv['rating']}, {comment}, "
-        f"'{rv['review_date'].strftime('%Y-%m-%d %H:%M:%S')}');"
-    )
-sql_lines.append("")
+    # Payments
+    sql_lines.append(f"-- Payments (Shard {shard})")
+    for pay in target_payments:
+        sql_lines.append(
+            f"INSERT INTO payments (order_id, amount, method, status, payment_date) VALUES "
+            f"({pay['order_id']}, {pay['amount']}, '{pay['method']}', '{pay['status']}', "
+            f"'{pay['payment_date'].strftime('%Y-%m-%d %H:%M:%S')}');"
+        )
+    sql_lines.append("")
 
-sql_lines.append("COMMIT;")
+    # Shipments
+    sql_lines.append(f"-- Shipments (Shard {shard})")
+    for sh in target_shipments:
+        delivered = (
+            "NULL"
+            if sh["delivered_date"] is None
+            else f"'{sh['delivered_date'].strftime('%Y-%m-%d %H:%M:%S')}'"
+        )
+        sql_lines.append(
+            f"INSERT INTO shipments (order_id, warehouse_id, carrier, tracking_number, shipped_date, delivered_date) VALUES "
+            f"({sh['order_id']}, {sh['warehouse_id']}, '{sh['carrier']}', '{sh['tracking']}', "
+            f"'{sh['shipped_date'].strftime('%Y-%m-%d %H:%M:%S')}', {delivered});"
+        )
+    sql_lines.append("")
 
-with open("insert_data.sql", "w") as f:
-    f.write("\n".join(sql_lines))
+    # Reviews
+    sql_lines.append(f"-- Reviews (Shard {shard})")
+    for rv in target_reviews:
+        comment = "NULL" if rv["comment"] is None else f"'{esc(rv['comment'])}'"
+        sql_lines.append(
+            f"INSERT INTO reviews (product_id, customer_id, rating, comment, review_date) VALUES "
+            f"({rv['product_id']}, {rv['customer_id']}, {rv['rating']}, {comment}, "
+            f"'{rv['review_date'].strftime('%Y-%m-%d %H:%M:%S')}');"
+        )
+    sql_lines.append("")
+    sql_lines.append("COMMIT;")
 
-print(f"SQL file generated: insert_data.sql")
-print(f"Total rows generated:")
-print(f"  Categories: {len(categories_data)}")
-print(f"  Suppliers: {len(suppliers_data)}")
-print(f"  Warehouses: {len(warehouses_data)}")
-print(f"  Customers: {len(customers_data)}")
-print(f"  Coupons: {len(coupons_data)}")
-print(f"  Products: {len(products_data)}")
-print(f"  Orders: {len(orders_data)}")
-print(f"  Order Items: {len(order_items_data)}")
-print(f"  Payments: {len(payments_data)}")
-print(f"  Shipments: {len(shipments_data)}")
-print(f"  Inventory: {len(inventory_data)}")
-print(f"  Reviews: {len(reviews_data)}")
-print(
-    f"TOTAL: {sum([len(categories_data), len(suppliers_data), len(warehouses_data), len(customers_data), len(coupons_data), len(products_data), len(orders_data), len(order_items_data), len(payments_data), len(shipments_data), len(inventory_data), len(reviews_data)])}"
-)
+    return "\n".join(sql_lines), {
+        "categories": len(categories_data),
+        "suppliers": len(suppliers_data),
+        "warehouses": len(warehouses_data),
+        "coupons": len(coupons_data),
+        "products": len(products_data),
+        "inventory": len(inventory_data),
+        "customers": len(target_customers),
+        "orders": len(target_orders),
+        "order_items": len(target_order_items),
+        "payments": len(target_payments),
+        "shipments": len(target_shipments),
+        "reviews": len(target_reviews),
+    }
+
+
+script_dir = os.path.dirname(os.path.abspath(__file__))
+
+# Generate Shard 1 dataset
+sql_s1, counts_s1 = build_sql(shard=1)
+with open(os.path.join(script_dir, "insert_data_shard1.sql"), "w") as f:
+    f.write(sql_s1)
+
+# Generate Shard 2 dataset
+sql_s2, counts_s2 = build_sql(shard=2)
+with open(os.path.join(script_dir, "insert_data_shard2.sql"), "w") as f:
+    f.write(sql_s2)
+
+print("Generated SQL files successfully in:", script_dir)
+print(f"Shard 1: Customers {counts_s1['customers']} (1..75), Orders {counts_s1['orders']} (1..100)")
+print(f"Shard 2: Customers {counts_s2['customers']} (1001..1075), Orders {counts_s2['orders']} (1001..1100)")

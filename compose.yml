@@ -15,8 +15,11 @@ services:
       - ./primary_data_1:/var/lib/postgresql:z
       - ./init/primary.sh:/docker-entrypoint-initdb.d/1-init.sh:ro
       - ./init/ddl.sql:/docker-entrypoint-initdb.d/2-ddl.sql:ro
-      - ./init/insert_data.sql:/docker-entrypoint-initdb.d/3-data.sql:ro
+      - ./init/insert_data_shard1.sql:/docker-entrypoint-initdb.d/3-data.sql:ro
+      - ./init/shard_constraints_shard1.sql:/docker-entrypoint-initdb.d/3b-constraints.sql:ro
       - ./init/grant.sql:/docker-entrypoint-initdb.d/4-grant.sql:ro
+      - ./init/fdw_shard1.sql:/docker-entrypoint-initdb.d/5-fdw.sql:ro
+      - ./query:/query:ro
     command:
       - postgres
       - -c
@@ -115,8 +118,11 @@ services:
       - ./primary_data_2:/var/lib/postgresql:z
       - ./init/primary.sh:/docker-entrypoint-initdb.d/1-init.sh:ro
       - ./init/ddl.sql:/docker-entrypoint-initdb.d/2-ddl.sql:ro
-      - ./init/insert_data.sql:/docker-entrypoint-initdb.d/3-data.sql:ro
+      - ./init/insert_data_shard2.sql:/docker-entrypoint-initdb.d/3-data.sql:ro
+      - ./init/shard_constraints_shard2.sql:/docker-entrypoint-initdb.d/3b-constraints.sql:ro
       - ./init/grant.sql:/docker-entrypoint-initdb.d/4-grant.sql:ro
+      - ./init/fdw_shard2.sql:/docker-entrypoint-initdb.d/5-fdw.sql:ro
+      - ./query:/query:ro
     command:
       - postgres
       - -c
@@ -198,12 +204,6 @@ services:
           data to be ready...'; sleep 2; done; exec
           /usr/local/bin/docker-entrypoint.sh postgres",
       ]
-
-volumes:
-  primary_data_1:
-  primary_1_replica_1_data:
-  primary_data_2:
-  primary_2_replica_1_data:
 
 networks:
   pg-network:
