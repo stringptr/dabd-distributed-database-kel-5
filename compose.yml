@@ -18,6 +18,7 @@ services:
       - ./init/insert_data_shard1.sql:/docker-entrypoint-initdb.d/3-data.sql:ro
       - ./init/shard_constraints_shard1.sql:/docker-entrypoint-initdb.d/3b-constraints.sql:ro
       - ./init/grant.sql:/docker-entrypoint-initdb.d/4-grant.sql:ro
+      - ./init/haproxy_user.sql:/docker-entrypoint-initdb.d/4b-haproxy.sql:ro
       - ./init/fdw_shard1.sql:/docker-entrypoint-initdb.d/5-fdw.sql:ro
       - ./query:/query:ro
     command:
@@ -122,6 +123,7 @@ services:
       - ./init/insert_data_shard2.sql:/docker-entrypoint-initdb.d/3-data.sql:ro
       - ./init/shard_constraints_shard2.sql:/docker-entrypoint-initdb.d/3b-constraints.sql:ro
       - ./init/grant.sql:/docker-entrypoint-initdb.d/4-grant.sql:ro
+      - ./init/haproxy_user.sql:/docker-entrypoint-initdb.d/4b-haproxy.sql:ro
       - ./init/fdw_shard2.sql:/docker-entrypoint-initdb.d/5-fdw.sql:ro
       - ./query:/query:ro
     command:
@@ -206,6 +208,27 @@ services:
           data to be ready...'; sleep 2; done; exec
           /usr/local/bin/docker-entrypoint.sh postgres",
       ]
+
+  haproxy:
+    build: ./haproxy
+    image: dabd-haproxy:local
+    container_name: haproxy
+    restart: unless-stopped
+    depends_on:
+      postgres-primary-1:
+        condition: service_healthy
+      postgres-primary-2:
+        condition: service_healthy
+    ports:
+      - "6532:5432"   # tulis shard-1
+      - "6533:5433"   # tulis shard-2
+      - "6632:6432"   # baca shard-1
+      - "6633:6433"   # baca shard-2
+      - "8404:8404"   # stats
+    volumes:
+      - ./haproxy/haproxy-main.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+    networks:
+      - pg-network
 
 networks:
   pg-network:
