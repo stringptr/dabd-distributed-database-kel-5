@@ -1,0 +1,7 @@
+# Shell script dijalankan di container Linux — wajib LF, apapun OS yang checkout
+*.sh text eol=lf
+
+# YAML & SQL biar konsisten juga
+*.yml text eol=lf
+*.yaml text eol=lf
+*.sql text eol=lf

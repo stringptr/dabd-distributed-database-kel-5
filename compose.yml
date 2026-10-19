@@ -18,6 +18,7 @@ services:
       - ./init/insert_data_shard1.sql:/docker-entrypoint-initdb.d/3-data.sql:ro
       - ./init/shard_constraints_shard1.sql:/docker-entrypoint-initdb.d/3b-constraints.sql:ro
       - ./init/grant.sql:/docker-entrypoint-initdb.d/4-grant.sql:ro
+      - ./init/haproxy_user.sql:/docker-entrypoint-initdb.d/4b-haproxy.sql:ro
       - ./init/fdw_shard1.sql:/docker-entrypoint-initdb.d/5-fdw.sql:ro
       - ./query:/query:ro
     command:
@@ -35,10 +36,11 @@ services:
     networks:
       - pg-network
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U primary -d postgres"]
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U primary -d postgres"]
       interval: 5s
       timeout: 5s
       retries: 10
+      start_period: 60s
 
   init-primary-1-replica-1:
     image: docker.io/postgres:18.6-alpine3.24
@@ -97,7 +99,7 @@ services:
     entrypoint: ["/bin/bash", "-c"]
     command:
       [
-        "while [ ! -s \"$PGDATA/PG_VERSION\" ]; do echo 'Waiting for standby
+        "while [ ! -s \"$$PGDATA/PG_VERSION\" ]; do echo 'Waiting for standby
           data to be ready...'; sleep 2; done; exec
           /usr/local/bin/docker-entrypoint.sh postgres",
       ]
@@ -121,6 +123,7 @@ services:
       - ./init/insert_data_shard2.sql:/docker-entrypoint-initdb.d/3-data.sql:ro
       - ./init/shard_constraints_shard2.sql:/docker-entrypoint-initdb.d/3b-constraints.sql:ro
       - ./init/grant.sql:/docker-entrypoint-initdb.d/4-grant.sql:ro
+      - ./init/haproxy_user.sql:/docker-entrypoint-initdb.d/4b-haproxy.sql:ro
       - ./init/fdw_shard2.sql:/docker-entrypoint-initdb.d/5-fdw.sql:ro
       - ./query:/query:ro
     command:
@@ -138,10 +141,11 @@ services:
     networks:
       - pg-network
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U primary -d postgres"]
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U primary -d postgres"]
       interval: 5s
       timeout: 5s
       retries: 10
+      start_period: 60s
 
   init-primary-2-replica-1:
     image: docker.io/postgres:18.6-alpine3.24
@@ -200,10 +204,31 @@ services:
     entrypoint: ["/bin/bash", "-c"]
     command:
       [
-        "while [ ! -s \"$PGDATA/PG_VERSION\" ]; do echo 'Waiting for standby
+        "while [ ! -s \"$$PGDATA/PG_VERSION\" ]; do echo 'Waiting for standby
           data to be ready...'; sleep 2; done; exec
           /usr/local/bin/docker-entrypoint.sh postgres",
       ]
+
+  haproxy:
+    build: ./haproxy
+    image: dabd-haproxy:local
+    container_name: haproxy
+    restart: unless-stopped
+    depends_on:
+      postgres-primary-1:
+        condition: service_healthy
+      postgres-primary-2:
+        condition: service_healthy
+    ports:
+      - "6532:5432"   # tulis shard-1
+      - "6533:5433"   # tulis shard-2
+      - "6632:6432"   # baca shard-1
+      - "6633:6433"   # baca shard-2
+      - "8404:8404"   # stats
+    volumes:
+      - ./haproxy/haproxy-main.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+    networks:
+      - pg-network
 
 networks:
   pg-network:

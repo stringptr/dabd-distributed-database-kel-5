@@ -90,39 +90,30 @@ Perilaku rejoin diatur `test/entrypoint-node.sh`: node yang punya data tapi tida
 punya `standby.signal` akan mengecek peer — kalau ada primary lain, ia wipe diri
 dan basebackup ulang dari primary tersebut.
 
-## Kontrak untuk integrasi dengan stack utama tim
+## Integrasi dengan stack utama tim (sudah terpasang)
 
-Agar `haproxy.cfg` bisa dipakai langsung di compose utama, tim harus menyediakan:
+Integrasi sudah aktif di `compose.yml` root:
 
-1. **Hostname service** (atau ubah baris `# >>> SESUAIKAN` di `haproxy.cfg`):
-   `pg-shard1-1`, `pg-shard1-2`, `pg-shard2-1`, `pg-shard2-2` — atau ganti dengan
-   nama service apapun di backend (2 baris per backend).
-2. **Port Postgres** backend: 5432 (sesuaikan di baris `server` bila berbeda).
-3. **Role login untuk health check** — default `haproxy` / password `haproxy`
-   (di `check_primary.sh` & `check_replica.sh`). Cukup satu role dengan `LOGIN`
-   (tidak perlu superuser; `pg_is_in_recovery()` bisa dipanggil role biasa).
-4. HAProxy dan semua node Postgres **satu Docker network**.
-5. Kalau tim memakai **Patroni**: tidak perlu role di poin 3 — ganti ke varian
-   `httpchk` (komentar di bawah `haproxy.cfg`).
+- **Config khusus stack tim**: `haproxy/haproxy-main.cfg` (menunjuk
+  `postgres-primary-1/2` + `postgres-primary-1/2-standby-1`). Config harness
+  (`haproxy.cfg`) tetap dipakai `test/compose.yml` dan tidak berubah.
+- **Role health check**: `init/haproxy_user.sql` membuat role login `haproxy`
+  (dipakai `check_primary.sh`/`check_replica.sh`; cukup LOGIN biasa,
+  `pg_is_in_recovery()` bisa dipanggil role biasa).
+- **Service `haproxy`** di compose root, satu network `pg-network`.
+  Karena port host 5432/5433 dipakai primary, mapping host-nya:
+  | Fungsi | Port di jaringan docker | Port host |
+  |--------|-------------------------|-----------|
+  | tulis shard-1 | `haproxy:5432` | **6532** |
+  | tulis shard-2 | `haproxy:5433` | **6533** |
+  | baca shard-1 | `haproxy:6432` | **6632** |
+  | baca shard-2 | `haproxy:6433` | **6633** |
+  | stats | `haproxy:8404` | **8404** |
+- Aplikasi di dalam docker cukup konek `haproxy:5432` (tulis) / `haproxy:6432`
+  (baca) dengan kredensial aplikasi biasa (`primary`/`standby`).
 
-Contoh tambah service HAProxy di compose utama tim:
-
-```yaml
-  haproxy:
-    build: ./haproxy          # atau image hasil build: dabd-haproxy:local
-    container_name: haproxy
-    restart: unless-stopped
-    depends_on: [postgres-primary-1, postgres-primary-2]   # + node standby bila ada
-    ports:
-      - "5432:5432"
-      - "5433:5433"
-      - "6432:6432"
-      - "6433:6433"
-      - "8404:8404"
-    volumes:
-      - ./haproxy/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
-    networks: [pg-network]
-```
+Kalau tim memakai **Patroni**: role `haproxy` tidak diperlukan — ganti ke varian
+`httpchk` (komentar di bawah `haproxy.cfg`).
 
 ## Struktur
 
