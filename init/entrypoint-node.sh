@@ -1,6 +1,9 @@
 #!/bin/bash
 # =============================================================================
-# Entry point universal node harness (primary perdana MAUPUN standby/rejoin).
+# Entry point universal node (primary perdana MAUPUN standby/rejoin).
+# Dipakai oleh:
+#   - stack utama (compose.yml root) untuk node primary -> auto-rejoin
+#   - harness uji haproxy/test/compose.yml untuk SEMUA node
 #
 # Env:
 #   PEERS      = daftar hostname semua node dalam shard yang sama (termasuk diri)
@@ -57,8 +60,32 @@ run_basebackup() {
   rm -rf "$PGDATA"/*
   mkdir -p "$PGDATA"
   chown -R postgres:postgres "$PGDATA"
+  # Tanpa -R: postgresql.auto.conf hasil salinan sumber dibersihkan dulu di
+  # bawah, lalu conninfo segar ditulis sendiri (hindari conninfo basi yang
+  # menunjuk node lama / slot yang sudah tidak ada).
   PGPASSWORD="$STANDBY_PASSWORD" gosu postgres pg_basebackup \
-    -h "$primary" -U "$STANDBY_USER" -D "$PGDATA" -Fp -Xs -P -R
+    -h "$primary" -U "$STANDBY_USER" -D "$PGDATA" -Fp -Xs -P
+
+  sed -i '/^primary_conninfo/d;/^primary_slot_name/d' "$PGDATA/postgresql.auto.conf"
+
+  # Slot replikasi fisik di primary baru (idempoten) — streaming memakai slot
+  # ini, sejalan dengan desain stack utama (slot persisten "standby1").
+  local slot
+  slot="$(PGPASSWORD="$STANDBY_PASSWORD" psql -h "$primary" -p 5432 -U "$STANDBY_USER" \
+    -d postgres -tAc "SELECT count(*) FROM pg_replication_slots WHERE slot_name='standby1'" \
+    2>/dev/null || echo 0)"
+  if [ "$slot" = "0" ]; then
+    PGPASSWORD="$STANDBY_PASSWORD" psql -h "$primary" -p 5432 -U "$STANDBY_USER" \
+      -d postgres -c "SELECT pg_create_physical_replication_slot('standby1')" >/dev/null
+    log "replication slot 'standby1' dibuat di $primary"
+  fi
+
+  {
+    echo "primary_conninfo = 'host=$primary port=5432 user=$STANDBY_USER password=$STANDBY_PASSWORD application_name=$NODE_NAME'"
+    echo "primary_slot_name = 'standby1'"
+  } >>"$PGDATA/postgresql.auto.conf"
+  touch "$PGDATA/standby.signal"
+  chown postgres:postgres "$PGDATA/postgresql.auto.conf" "$PGDATA/standby.signal"
   log "Basebackup selesai — node siap sebagai standby."
 }
 

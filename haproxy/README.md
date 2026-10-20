@@ -86,9 +86,14 @@ docker exec -e PGPASSWORD=haproxy pg-shard1-1 psql -U haproxy -d postgres \
   -c "SELECT pg_is_in_recovery()"   # true = sudah standby lagi
 ```
 
-Perilaku rejoin diatur `test/entrypoint-node.sh`: node yang punya data tapi tidak
+Perilaku rejoin diatur `entrypoint-node.sh` (kini di [`init/entrypoint-node.sh`](../init/entrypoint-node.sh),
+dipakai bersama oleh stack utama): node yang punya data tapi tidak
 punya `standby.signal` akan mengecek peer — kalau ada primary lain, ia wipe diri
 dan basebackup ulang dari primary tersebut.
+
+> Di **stack utama tim**, promosi saat demo 2 tidak perlu manual — service
+> `watchdog-1`/`watchdog-2` (lihat [README root, bagian Auto Failover](../README.md))
+> otomatis menjalankan `pg_promote()` bila primary mati ±15 detik.
 
 ## Integrasi dengan stack utama tim (sudah terpasang)
 
@@ -125,6 +130,8 @@ haproxy/
 ├── check_replica.sh    # health check: pg_is_in_recovery() = 't'  → boleh baca
 └── test/
     ├── compose.yml     # harness: 2 shard (primary+standby) + haproxy
-    ├── entrypoint-node.sh  # bootstrap/rejoin node (initdb | basebackup | rejoin)
     └── init-primary.sh     # seed primary perdana (role haproxy/standby + tabel demo)
 ```
+
+`entrypoint-node.sh` tidak lagi di `test/` — kini ada di [`init/entrypoint-node.sh`](../init/entrypoint-node.sh)
+karena dipakai juga oleh node primary stack utama (fitur auto-rejoin/auto-failover).
