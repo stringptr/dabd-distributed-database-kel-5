@@ -9,18 +9,24 @@ services:
       POSTGRES_DB: postgres
       REPLICATION_USER: standby
       REPLICATION_PASSWORD: standby
+      PEERS: "postgres-primary-1 postgres-primary-1-standby-1"
+      NODE_NAME: postgres-primary-1
+      BOOTSTRAP: initdb
     ports:
       - "5432:5432"
     volumes:
       - ./primary_data_1:/var/lib/postgresql:z
+      - ./init/entrypoint-node.sh:/entrypoint-node.sh:ro
       - ./init/primary.sh:/docker-entrypoint-initdb.d/1-init.sh:ro
       - ./init/ddl.sql:/docker-entrypoint-initdb.d/2-ddl.sql:ro
       - ./init/insert_data_shard1.sql:/docker-entrypoint-initdb.d/3-data.sql:ro
       - ./init/shard_constraints_shard1.sql:/docker-entrypoint-initdb.d/3b-constraints.sql:ro
       - ./init/grant.sql:/docker-entrypoint-initdb.d/4-grant.sql:ro
       - ./init/haproxy_user.sql:/docker-entrypoint-initdb.d/4b-haproxy.sql:ro
+      - ./init/watchdog_user.sql:/docker-entrypoint-initdb.d/4c-watchdog.sql:ro
       - ./init/fdw_shard1.sql:/docker-entrypoint-initdb.d/5-fdw.sql:ro
       - ./query:/query:ro
+    entrypoint: ["/bin/bash", "/entrypoint-node.sh"]
     command:
       - postgres
       - -c
@@ -114,18 +120,24 @@ services:
       POSTGRES_DB: postgres
       REPLICATION_USER: standby
       REPLICATION_PASSWORD: standby
+      PEERS: "postgres-primary-2 postgres-primary-2-standby-1"
+      NODE_NAME: postgres-primary-2
+      BOOTSTRAP: initdb
     ports:
       - "5433:5432"
     volumes:
       - ./primary_data_2:/var/lib/postgresql:z
+      - ./init/entrypoint-node.sh:/entrypoint-node.sh:ro
       - ./init/primary.sh:/docker-entrypoint-initdb.d/1-init.sh:ro
       - ./init/ddl.sql:/docker-entrypoint-initdb.d/2-ddl.sql:ro
       - ./init/insert_data_shard2.sql:/docker-entrypoint-initdb.d/3-data.sql:ro
       - ./init/shard_constraints_shard2.sql:/docker-entrypoint-initdb.d/3b-constraints.sql:ro
       - ./init/grant.sql:/docker-entrypoint-initdb.d/4-grant.sql:ro
       - ./init/haproxy_user.sql:/docker-entrypoint-initdb.d/4b-haproxy.sql:ro
+      - ./init/watchdog_user.sql:/docker-entrypoint-initdb.d/4c-watchdog.sql:ro
       - ./init/fdw_shard2.sql:/docker-entrypoint-initdb.d/5-fdw.sql:ro
       - ./query:/query:ro
+    entrypoint: ["/bin/bash", "/entrypoint-node.sh"]
     command:
       - postgres
       - -c
@@ -227,6 +239,53 @@ services:
       - "8404:8404"   # stats
     volumes:
       - ./haproxy/haproxy-main.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+    networks:
+      - pg-network
+
+  # --- AUTO FAILOVER ---------------------------------------------------------
+  # Watchdog per shard: primary tak terjangkau FAIL_THRESHOLD kali berturut
+  # -> pg_promote() standby -> HAProxy memindahkan tulis otomatis.
+  watchdog-1:
+    image: docker.io/postgres:18.6-alpine3.24
+    container_name: watchdog-1
+    restart: unless-stopped
+    depends_on:
+      postgres-primary-1:
+        condition: service_started
+      postgres-primary-1-standby-1:
+        condition: service_started
+    environment:
+      PRIMARY_HOST: postgres-primary-1
+      STANDBY_HOST: postgres-primary-1-standby-1
+      PGUSER: watchdog
+      PGPASSWORD: watchdog
+      CHECK_INTERVAL: "3"
+      FAIL_THRESHOLD: "5"
+    volumes:
+      - ./failover/watchdog.sh:/watchdog.sh:ro
+    entrypoint: ["/bin/bash", "/watchdog.sh"]
+    networks:
+      - pg-network
+
+  watchdog-2:
+    image: docker.io/postgres:18.6-alpine3.24
+    container_name: watchdog-2
+    restart: unless-stopped
+    depends_on:
+      postgres-primary-2:
+        condition: service_started
+      postgres-primary-2-standby-1:
+        condition: service_started
+    environment:
+      PRIMARY_HOST: postgres-primary-2
+      STANDBY_HOST: postgres-primary-2-standby-1
+      PGUSER: watchdog
+      PGPASSWORD: watchdog
+      CHECK_INTERVAL: "3"
+      FAIL_THRESHOLD: "5"
+    volumes:
+      - ./failover/watchdog.sh:/watchdog.sh:ro
+    entrypoint: ["/bin/bash", "/watchdog.sh"]
     networks:
       - pg-network
 

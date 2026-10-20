@@ -104,6 +104,142 @@ Data didistribusikan secara terpisah antara `postgres-primary-1` dan `postgres-p
 
 ---
 
+## Implementasi Tugas 3: Auto Failover
+
+Auto failover ditambahkan di atas arsitektur yang sudah ada (replikasi streaming + HAProxy) tanpa mengubah config HAProxy maupun skema database.
+
+### Cara Kerja
+
+```
+Client ──tulis──▶ HAProxy :6532/:6533 ──▶ Primary shard
+                     │                        │ crash
+                     │ health check            ▼
+                     │ pg_is_in_recovery()  watchdog-1/2 mendeteksi primary
+                     │ (sudah ada)           tidak terjangkau 5× berturut (±26 dtk)
+                     │                        ▼
+                     │◀── role berubah ── pg_promote() standby shard
+                     ▼                        │
+              traffic tulis pindah        standby = primary baru
+              ke node baru (~6 dtk)
+```
+
+1. **Watchdog per shard** (`failover/watchdog.sh`, service `watchdog-1`/`watchdog-2` di `compose.yml`):
+   - Memanggil `SELECT pg_is_in_recovery()` ke primary shard tiap 3 detik (`CHECK_INTERVAL`) dengan role superuser `watchdog` (`init/watchdog_user.sql`).
+   - Jika primary tidak terjangkau 5 kali berturut (`FAIL_THRESHOLD`; terukur ±26 dtk karena koneksi ke IP container mati menunggu timeout), watchdog memastikan standby masih berperan standby lalu menjalankan `SELECT pg_promote(true, 5)`.
+   - Setelah promosi, watchdog masuk state `PROMOTED` (final) dan hanya mencatat peringatan bila primary lama hidup kembali.
+2. **Routing otomatis oleh HAProxy** (komponen Tugas 4, sudah ada): health check `check_primary.sh`/`check_replica.sh` mendeteksi peran baru dalam ≤8 detik (`inter 2s`, `rise 2`/`fall 3`) — traffic tulis pindah tanpa edit config.
+3. **Auto-rejoin primary lama**: node primary memakai `init/entrypoint-node.sh` (diadaptasi dari harness uji `haproxy/test/`). Saat container primary lama dihidupkan setelah kalah failover, entrypoint mendeteksi ada node lain yang kini primary, lalu **wipe data diri + `pg_basebackup` dari primary baru** — kembali sebagai standby secara otomatis. Tidak perlu reset `down -v` untuk memulihkan keadaan normal.
+
+### Demo Auto-Failover
+
+Otomatis (butuh bash: Git Bash/WSL/Linux):
+```bash
+docker compose up -d --build
+bash failover/demo_failover.sh
+```
+
+Manual — langkah dan bukti yang diharapkan:
+```bash
+# 1. Baseline: tulis shard-1 dilayani primary
+docker exec -i -e PGPASSWORD=primary haproxy psql -h haproxy -p 5432 -U primary -d postgres \
+  -c "SELECT inet_server_addr()"
+#    -> 172.x.x.2 (postgres-primary-1)
+
+# 2. Simulasi crash primary shard-1
+docker compose stop postgres-primary-1
+
+# 3. Tunggu watchdog-1 mempromosikan standby (±30 detik total) — cek log:
+docker compose logs -f watchdog-1
+#    -> "[watchdog postgres-primary-1] ... FAILOVER SELESAI: postgres-primary-1-standby-1 kini primary baru"
+
+# 4. Tulis via HAProxy lagi (beri jeda ~8 dtk untuk health check)
+docker exec -i -e PGPASSWORD=primary haproxy psql -h haproxy -p 5432 -U primary -d postgres \
+  -c "SELECT inet_server_addr()"
+#    -> 172.x.x.3 (postgres-primary-1-standby-1, primary baru)
+
+# 5. Rejoin node lama (otomatis wipe + basebackup)
+docker compose start postgres-primary-1
+docker exec -i -e PGPASSWORD=primary postgres-primary-1 psql -U primary -d postgres \
+  -c "SELECT pg_is_in_recovery()"   # -> true (sudah standby lagi)
+```
+
+**Urutan waktu failover (RTO, terukur pada pengujian nyata)**: deteksi watchdog ±26 dtk (5 × gagal, interval 3–6 dtk termasuk timeout DNS koneksi container yang sudah berhenti) + promosi ±4 dtk + HAProxy langsung pindah ≈ **±30 detik** dari primary mati sampai tulis dilayani node baru. Threshold bisa diturunkan lewat env `CHECK_INTERVAL`/`FAIL_THRESHOLD` di `compose.yml` (trade-off: lebih agresif = lebih rentan false positive).
+
+### Hasil Eksekusi (Bukti Failover)
+
+Diuji penuh pada 2026-10-20 dengan `bash failover/demo_failover.sh`. Log asli:
+
+**1. Watchdog otomatis mempromosikan standby saat primary crash (tanpa intervensi manual):**
+
+```
+11:07:21  $ docker compose stop postgres-primary-1          # simulasi crash
+11:07:21  [watchdog postgres-primary-1] KEGAGALAN 1/5: postgres-primary-1 tidak terjangkau
+11:07:27  [watchdog postgres-primary-1] KEGAGALAN 2/5: postgres-primary-1 tidak terjangkau
+11:07:35  [watchdog postgres-primary-1] KEGAGALAN 3/5: postgres-primary-1 tidak terjangkau
+11:07:41  [watchdog postgres-primary-1] KEGAGALAN 4/5: postgres-primary-1 tidak terjangkau
+11:07:47  [watchdog postgres-primary-1] KEGAGALAN 5/5: postgres-primary-1 tidak terjangkau
+11:07:47  [watchdog postgres-primary-1] mempromosikan postgres-primary-1-standby-1 menjadi primary baru (pg_promote)...
+11:07:51  [watchdog postgres-primary-1] FAILOVER SELESAI: postgres-primary-1-standby-1 kini primary baru.
+          HAProxy akan memindahkan tulis dalam ~6 detik.
+```
+
+**2. Routing tulis HAProxy berpindah otomatis ke primary baru (tanpa edit config):**
+
+```bash
+# sebelum failover
+docker exec -i -e PGPASSWORD=primary haproxy psql -h haproxy -p 5432 -U primary -d postgres \
+  -tAc "SELECT inet_server_addr() FROM failover_demo WHERE note='sebelum failover'"
+172.20.0.3        # = postgres-primary-1 (primary lama)
+
+# sesudah failover (insert sukses via port yang sama)
+172.20.0.4        # = postgres-primary-1-standby-1 (primary baru)
+SELECT inet_server_addr() ... WHERE note='sesudah failover'
+172.20.0.4
+
+# peran node shard-1
+postgres-primary-1-standby-1  pg_is_in_recovery() = f   # kini PRIMARY
+```
+
+**3. Auto-rejoin primary lama (wipe + pg_basebackup) — kembali sebagai standby:**
+
+```
+11:08:01  $ docker compose start postgres-primary-1
+          [entrypoint postgres-primary-1] Primary lain terdeteksi (postgres-primary-1-standby-1)
+          → rejoin sebagai standby (wipe + basebackup).
+11:08:28  postgres-primary-1  pg_is_in_recovery() = t    # rejoin selesai (±27 dtk)
+2 baris failover_demo terlihat                           # data pre+post failover terbaca
+```
+
+**4. Setelah rejoin — replikasi dari primary baru berjalan normal (slot aktif):**
+
+```bash
+# di postgres-primary-1-standby-1 (primary baru):
+SELECT application_name, client_addr, state FROM pg_stat_replication;
+ application_name  | client_addr |   state
+-------------------+-------------+-----------
+ postgres-primary-1 | 172.20.0.3 | streaming
+
+SELECT slot_name, active FROM pg_replication_slots;
+ standby1 | t
+
+# port baca HAProxy pulih, dilayani node rejoined:
+read ok, recovery=true server=172.20.0.3
+# shard-2 tidak terganggu:
+shard2 recovery=false, orders=100
+```
+
+Semua service kembali sehat (`docker compose ps`): 2 primary, 2 standby, HAProxy, 2 watchdog.
+
+### Keterbatasan Auto Failover
+
+1. **Replication async**: WAL belum tentu sudah ter-replay penuh di standby saat promosi — maksimal beberapa detik data terakhir bisa hilang.
+2. **Tanpa fencing/STONITH**: watchdog hanya mendeteksi ketidakjangkauan dari sudut pandangnya. Jika primary hidup tetapi terisolasi jaringan (bukan crash), ada jendela dual-primary sampai primary lama bangun dan di-rejoin entrypoint. Sistem production memakai STONITH/fencing atau consensus (etcd/Patroni) untuk ini.
+3. **Satu kali failover per watchdog**: setelah promosi, watchdog tidak lagi mempromosikan otomatis (shard hanya punya 2 node). Bila primary baru mati, kembalikan node via rejoin lalu restart watchdog (`docker compose restart watchdog-1`) atau reset penuh (lihat **Cara Menjalankan → Reset Penuh** — hapus juga direktori bind-mount data, `down -v` saja tidak cukup).
+4. **Init script hanya jalan sekali**: role `watchdog` dibuat saat initdb perdana. Data lama (sebelum fitur ini) perlu reset penuh sekali (lihat di atas) untuk memicu init ulang.
+5. **Port baca kosong saat window satu-node**: tepat setelah failover (sebelum rejoin selesai), shard hanya punya satu node hidup yang berperan primary — tidak ada server lulus health-check `check_replica.sh`, sehingga port baca shard-1 (`:6632`/`haproxy:6432`) menolak koneksi selama ±1 menit sampai node lama selesai rejoin. Pada window ini baca bisa dilayani lewat **port tulis** (`:6532`) karena primary juga menerima `SELECT`. Setelah rejoin, port baca pulih (dilayani node rejoined). Alternatif bila ingin port baca selalu tersedia: tambah node ketiga per shard, atau ubah health-check backend baca agar primary juga melayani baca (keputusan routing — Tugas 4).
+
+---
+
 ## Batasan Sistem (Known Limitations)
 
 Dalam arsitektur *shared-nothing distributed database* berbasis RDBMS mandiri:
@@ -126,10 +262,23 @@ Dalam arsitektur *shared-nothing distributed database* berbasis RDBMS mandiri:
    ```bash
    docker compose ps
    ```
+   Service `watchdog-1` dan `watchdog-2` (auto failover) berjalan sebagai proses latar yang selalu aktif — lognya: `docker compose logs -f watchdog-1`.
 
 3. **(Opsional) Generate Ulang Dataset Shard**:
    ```bash
    python init/generate.py
+   ```
+
+4. **Reset Penuh (hapus semua data & init ulang dari nol)**:
+   > Penting: direktori data adalah **bind-mount** (`primary_data_1/2`, `primary_1/2_replica_1_data`) —
+   > `docker compose down -v` saja TIDAK menghapusnya, sehingga init script tidak akan jalan ulang.
+   ```bash
+   # PowerShell
+   docker compose down -v; Remove-Item -Recurse -Force primary_data_*, primary_*_replica_*_data
+   # atau bash (Git Bash/WSL)
+   docker compose down -v && rm -rf primary_data_* primary_*_replica_*_data
+
+   docker compose up -d --build
    ```
 
 ---
